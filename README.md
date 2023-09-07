@@ -145,8 +145,9 @@ live555的服务端
 
 在`rtsp_service.cpp` 代码中主要有两个方法`create_live555_multicast`，`create_live555`,分别对应组播服务和单播服务。可以修改`main`方法开启对应的服务
 
-create_live555 [Ref:live555/testProgs/testH264VideoToTransportStream.cpp]
-create_live555_multicast [Ref:live555/testProgs/testH264VideoStreamer.cpp]
+create_live555 `[Ref:live555/testProgs/testH264VideoToTransportStream.cpp]`
+
+create_live555_multicast `[Ref:live555/testProgs/testH264VideoStreamer.cpp]`
 
 运行脚本：
 ```
@@ -155,13 +156,13 @@ create_live555_multicast [Ref:live555/testProgs/testH264VideoStreamer.cpp]
 
 ## 3.4 rtsp_send_opencv_mpp_yuv_live555
 live555的发送端
-从VideoX中捕获数据，并转换成YUV,送入Mpp编码器编码，拿到编码后的原始码流，交由live555进行传输
+从Video*中捕获数据，并转换成YUV,送入Mpp编码器编码，拿到编码后的原始码流，交由live555进行传输
 
 其中与live555通信分了两种方式：1. FIFO通道，2. 异步队列queue
 
-Live555提供的样例主要是以文件的方式进行推流，所以使用FIFO管道文件，在编码后将包写入FIFO，由LIVE555进行消费发送
+Live555提供的样例主要是以文件的方式进行推流，所以使用FIFO管道文件，在编码后将包数据写入FIFO，由LIVE555进行消费发送
 
-异步队列的方式，FIFO最大为64K，并且涉及IO操作，所以我同时也实现了通过内存队列的方式来进行数据流转
+FIFO最大为64K，并且涉及IO操作，所以我同时也实现了通过内存队列的方式来进行数据流转，即异步队列的方式。
 
 `rtsp_send_opencv_mpp_yuv_live555`采用的是**FIFO通道**方案
 
@@ -175,7 +176,8 @@ Live555提供的样例主要是以文件的方式进行推流，所以使用FIFO
 
 ## 3.5 rtsp_send_opencv_mpp_rgb_live555
 live555的RGB数据发送端
-和3.4唯一区别在于原始输入数据是RGB，不需要转换成YUV
+和3.4唯一区别在于原始输入数据是RGB，不需要转换成YUV。**注：RGB数据量是YUV的一倍，会导致编码效率降低。**，同时这两块的数据拷贝方式不一样，具体参考[rk_ffmpeg](https://github.com/EZreal-zhangxing/rk_ffmpeg)的解析
+
 运行脚本：
 ```
 # 确保live555服务已启动
@@ -187,7 +189,24 @@ live555的RGB数据发送端
 ## 3.6 rtsp_send_opencv_mpp_yuv_live555_server
 
 主要功能同`rtsp_send_opencv_mpp_yuv_live555`
-主要区别在于 `init_data()`方法中，将`fifo_open`替换成了 启动组播服务的线程，同时`send_packet()`方法中的`fifo_write()`替换成了`buffer_write()`
+主要区别在于 `init_data()`方法中，将`fifo_open`替换成了 启动组播服务的线程，同时`send_packet()`方法中的`fifo_write()`替换成了`buffer_write()`,并注释了`destory_`方法中的`fifo_close`
+
+```
+// init_data()::line:312 
+
+thread live555(create_multicast_live555);    
+live555.detach();
+// fifo_open();
+
+// send_packet()::line:407
+
+// fifo_write(packet);
+buffer_write(packet);
+
+// destroy_()::line:529
+// fifo_close();
+
+```
 
 **该方法采用的是异步队列的实现方式。**
 
@@ -207,13 +226,14 @@ fifo_x系列，是操作FIFO文件的一套接口，buffer_x则是操作异步�
 ```
 The "test*Streamer" test programs read from a file. Can I modify them so that they take input from a H.264, H.265, or MPEG encoder instead, so I can stream live (rather than prerecorded) video and/or audio?
 Yes. The easiest way to do this is to change the appropriate "test*Streamer.cpp" file to read from "stdin" (instead of "test.*"), and then pipe the output of your encoder to (your modified) "test*Streamer" application. (Even simpler, if your operating system represents the encoder device as a file, then you can just use the name of this file (instead of "test.*").)
-Alternatively, if your encoder presents you with a sequence of frames (or 'NAL units'), rather than a sequence of bytes, then a more efficient solution would be to write your own "FramedSource" subclass that encapsulates your encoder, and delivers audio or video frames directly to the appropriate "*RTPSink" object. This avoids the need for an intermediate 'framer' filter that parses the input byte stream. (If, however, you are streaming H.264, H.265, or MPEG-4 (or MPEG-2 video with "B" frames), then you should insert the appropriate "*DiscreteFramer" filter between your source object and your "*RTPSink" object.)
+Alternatively, **if your encoder presents you with a sequence of frames (or 'NAL units'), rather than a sequence of bytes, then a more efficient solution would be to write your own "FramedSource" subclass that encapsulates your encoder**, and delivers audio or video frames directly to the appropriate "*RTPSink" object. **This avoids the need for an intermediate 'framer' filter that parses the input byte stream.** (If, however, you are streaming H.264, H.265, or MPEG-4 (or MPEG-2 video with "B" frames), then you should insert the appropriate "*DiscreteFramer" filter between your source object and your "*RTPSink" object.)
 
 For a model of how to do that, see "liveMedia/DeviceSource.cpp" (and "liveMedia/include/DeviceSource.hh"). You will need to fill in parts of this code to do the actual reading from your encoder.
 ```
-根据官方文档，以字节流数据作为数据源时[Ref:live555/testProgs/ByteStreamFileSource.cpp]，读取数据后会交给[Ref:live555/testProgs/H264VideoStreamFramer.cpp] 进行帧的组合。然后进行发送，而我们编码器输出就是一个完整的帧数据，所以我们自定义数据源只需要按帧发送,
+根据官方文档，以字节流数据作为数据源时[`Ref:ByteStreamFileSource.cpp`]，读取数据后会交给[`Ref:H264VideoStreamFramer.cpp`] 进行帧的组合。
+然后进行发送，而我们编码器输出就是一个完整的帧编码后的数据，所以我们自定义数据源只需要按帧数据读取然后发送即可,并且可以避免对码流的过滤所带来的额外开销
 
-所以继承FramedSource，并实现子类。该子类主要重载doGetNextFrame方法。该方法用于加载数据,加载后会调用父类方法进行数据处理 
+因此我创建了一个自定义的数据源子类继承FramedSource。该子类主要重载doGetNextFrame方法。该方法用于加载数据,加载后会调用父类方法进行数据处理。
 
 ```
 class RedefineByteStreamMemoryBufferSource: public FramedSource {
