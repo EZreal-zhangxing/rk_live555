@@ -299,7 +299,7 @@ MPP_RET init_decoder(){
     MPP_RET res = MPP_OK;
     RK_U32 need_split = 0;
     RK_U32 enable_fast = 1;
-    res = mpp_buffer_group_get_internal(&group,MPP_BUFFER_TYPE_DRM);
+    // res = mpp_buffer_group_get_internal(&group,MPP_BUFFER_TYPE_DRM);
     
     res = mpp_create(&mppCtx,&mppApi);
     mppApi->control(mppCtx,MPP_DEC_SET_PARSER_SPLIT_MODE,&need_split);
@@ -486,7 +486,7 @@ int read_data_and_decode(RTSPReceiveData * &data){
             printf("%p decoder require buffer w:h [%d:%d] stride [%d:%d] buf_size %d \n",mppCtx, width, height, hor_stride, ver_stride, buf_size);
 
             res = mpp_buffer_group_get_external(&group,MPP_BUFFER_TYPE_DRM);
-            // res = mpp_buffer_group_limit_config(&group, buf_size, 24);
+            res = mpp_buffer_group_limit_config(&group, buf_size, 24);
             mppApi->control(mppCtx, MPP_DEC_SET_INFO_CHANGE_READY, NULL);
 
         }else{
@@ -607,8 +607,8 @@ int smart_read_data_and_decode(DummySink *sink){
                 printf("%p decode_get_frame get info changed found\n", mppCtx);
                 printf("%p decoder require buffer w:h [%d:%d] stride [%d:%d] buf_size %d \n",mppCtx, width, height, hor_stride, ver_stride, buf_size);
 
-                // res = mpp_buffer_group_get_internal(&group,MPP_BUFFER_TYPE_DRM);
-                // res = mpp_buffer_group_limit_config(&group, buf_size, 24);
+                res = mpp_buffer_group_get_internal(&group,MPP_BUFFER_TYPE_DRM);
+                res = mpp_buffer_group_limit_config(&group, buf_size, 24);
                 mppApi->control(mppCtx, MPP_DEC_SET_INFO_CHANGE_READY, NULL);
 
             }else{
@@ -711,7 +711,7 @@ int read_data_and_decode_show_directly(DummySink *sink){
                 printf("%p decoder require buffer w:h [%d:%d] stride [%d:%d] buf_size %d \n",mppCtx, width, height, hor_stride, ver_stride, buf_size);
 
                 res = mpp_buffer_group_get_internal(&group,MPP_BUFFER_TYPE_DRM);
-                // res = mpp_buffer_group_limit_config(&group, buf_size, 24);
+                res = mpp_buffer_group_limit_config(&group, buf_size, 24);
                 mppApi->control(mppCtx, MPP_DEC_SET_INFO_CHANGE_READY, NULL);
 
             }else{
@@ -769,7 +769,13 @@ void display_(){
             delete temp;
         }
     }
-
+    /******防止内存泄漏,清空FrameQueue的数据*****/
+    // printf("delete frame_queue \n");
+    while(!frame_queue.empty()){
+        std::shared_ptr<DisplayFrame *> frame = frame_queue.tryPop();
+        delete *(frame.get());
+        printf("delete frame_queue \n");
+    }
     printf("kill display thread \n");
 }
 

@@ -16,9 +16,18 @@
 - [x] 从网络拉取数据流
 - [x] 集成Live555进行推拉流
 - [x] 支持单播/组播
-- [x] 延迟200ms以下
+- [x] 延迟20ms以下
 
 # 2.配置环境
+
+本项目环境依赖如下：
+- [x] libdrm
+- [x] rockchip_mpp
+- [x] live555
+- [x] Opencv
+- [x] SDL2 (项目遗留)
+- [x] FFmpeg (项目遗留)
+
 ## 2.1 LIVE555安装
 
 从[Live555](http://live555.com/mediaServer/#downloading)下载最新版本的源码，然后进入主目录，添加config.rk3588,该文件主要申明编译架构以及编译参数。文件内容如下：
@@ -98,7 +107,7 @@ DRM的主要流程如下：
  ----------      ---------------------      -----------     -------------
                         |                                          |
                      ------                                      handle
-                    | CRTC |---------                              v
+                    | CRTC |<----event handle                      v
                     ------          |                         ---------------
                                     |                        | drmModeAddFB/2| (创建FrameBuffer)
                                     |                         ---------------
@@ -127,10 +136,10 @@ DRM的主要流程如下：
 -------------------------------------           -------------------------------------
 ```
 
-1. 根据上一步中得到的句柄handle创建FrameBuffer
-2. 将dumb数据映射到用户空间得到虚拟地址
-3. 将图像数据写入该虚拟地址
-4. 调用CRTC进行数据刷新显示
+4. 根据上一步中得到的句柄handle创建FrameBuffer
+5. 将dumb数据映射到用户空间得到虚拟地址
+6. 将图像数据写入该虚拟地址
+7. 调用CRTC进行数据刷新显示
 
 上述两个程序，主要是对DRM进行测试
 
@@ -483,13 +492,15 @@ if (numFrameBytesToUse > 0) {
 ```
 
 
-所以可以看到`OutPacketBuffer::fMax`关系到了整个数据包发送的大小，`OutPacketBuffer`对象初始化是初始化`MultiFramedRTPSink`时通过方法`setPacketSizes()`创建的，这也是为什么一些关于优化的文章会提到优化这个地方的参数，该方法有两个参数，第一个是包的`preferredPacketSize`,第二个就是包的`maxPacketSize`,所以我为了加大包一次性发送大小我调整该值到了`8192 * 3`。这样可以减少关键帧的发送次数。在Ubuntu下系统函数sendto的最大发送大小和系统的设置有关，一般是不能超过256k，但是UDP包的最大尺寸为65507，如果超出这个尺寸，依然会在网络层进行分包发送和重组。
+所以可以看到`OutPacketBuffer::fMax`关系到了整个数据包发送的大小，`OutPacketBuffer`对象初始化是初始化`MultiFramedRTPSink`时通过方法`setPacketSizes()`创建的，这也是为什么一些关于优化的文章会提到优化这个地方的参数，该方法有两个参数，第一个是包的`preferredPacketSize`,第二个就是包的`maxPacketSize`,所以我为了加大包一次性发送大小我调整该值到了`8192 * 3`。这样可以减少关键帧的发送次数。同时这个值也不能过大。在Ubuntu下系统函数sendto的最大发送大小和系统的设置有关，一般是不能超过256k，但是UDP包的最大尺寸为65507，如果超出这个尺寸，依然会在网络层进行分包发送和重组。
 
 
 
 ### 3.7.2 H264VideoStreamFramer 系列
 
 这套是当服务器端调用H264VideoStreamFramer进行发送时，对应客户端代码文件是:`rtsp_connect.cpp,mpp_decoder.cpp`
+
+这一套服务发送延迟大概在`170ms`左右
 
 #### 3.7.2.1 CMakeList.txt
 ```
@@ -512,6 +523,8 @@ P帧和I帧的三个部分会分成三个独立的包在网络中发送，但是
 
 这套是当服务器端调用H264VideoStreamFramer进行发送时，对应客户端代码文件是：`rtsp_connect_discrete.cpp,mpp_decoder_discrete.cpp`
 
+使用这套发送，网络传递(局域网)+解码+显示大概在`10ms`左右
+
 #### 3.7.3.1 CMakeList.txt
 ```
 add_executable(rtsp_live555_client
@@ -527,3 +540,58 @@ ${PROJECT_SOURCE_DIR}/src/rtsp_client.cpp)
 但这个时候就需要根据协议的开头码来判断帧的结束，所以当`第五个字节`的值是`0x06`或者`0x67`时，说明上一个帧的包数据发送结束。然后将累计收到的数据送入队列进行后续的解码和显示操作。
 
 
+## 4. 解码说明
+
+本项目解码主要借用rockchip_mpp进行硬件解码，可参考`mpp_decoder.cpp`或者`mpp_decoder_discrete.cpp`里面的代码
+
+解码流程如下所示：
+```
+                    ---------------             ---------                 -----------
+                    | Packet_data | <--IsNull-- | frame |  ---NotNull-->  | display |
+                    ---------------             ---------                 ----------- 
+                           |                        ^
+                           V                        |
+------------     ---------------------     --------------------
+| mpp_init | --> | decode_put_packet | --> | decode_get_frame |
+------------     ---------------------     --------------------
+
+
+```
+
+该部分代码主要分为两部分：初始化和编解码
+
+### 4.1 初始化部分
+初始化编解码的上下文和Api，然后设置相应的参数，主要是`buffer_group`以及解码输出格式等
+
+### 4.2 编解码部分
+解码器在未收到I帧的情况下是无法解码的，因为没有帧高，帧长等信息。
+同时我们并不能确保客户端接入网络时，收到的第一帧数据是`I帧`，因此程序会等待`I帧`的到来，然后将收到的第一个**I帧**的数据送入解码器解析帧的相关信息。
+
+在送入`I帧`后MPP解码器触发`mpp_frame_get_info_change`，同时初始化`buffer_group`，此时可以根据帧大小来设置`buffer_group`的缓存大小和帧数限制，然后我们必须调用`MPP_DEC_SET_INFO_CHANGE_READY`，告知`buffer_group`完成设置继续进行解码。
+
+每次送入`Packet`后，调用`decode_get_frame`并不一定会立刻返回帧数据,因此我们需要根据`frame`是否为空来判断下一步。
+
+## 5. drm显示说明
+
+这里同样采取了两种方式用来显示：一种是直接显示，一种是异步队列的方式。
+
+直接显示：将解码后得到的`frame`数据直接写入drm的用户空间中的地址中。这一步同样会等到显示结束然后处理下一个到来的数据包，会有一定的处理延迟。
+异步队列：将解码后的`frame`数据送入异步队列，等到`display`线程来消费。
+
+因此以`mpp_decoder_discrete.cpp`为例
+这里面包含了三个主要的显示函数：`read_data_and_decode`,`read_data_and_decode_show_directly`,`smart_read_data_and_decode`。
+
+`read_data_and_decode`:采用同步的方式，获取从网络接收到的数据包，送入解码器解码，然后进行同步展示。该方法由`rtsp_connect_*.cpp`来主动调用。
+`read_data_and_decode_show_directly`:采用异步的方式获取数据包，同步展示的方法。
+`smart_read_data_and_decode`:则是异步获取数据包，并且异步展示。
+
+## 6. 坑与填
+
+### 6.1 DRM显示坑
+在3.2章节说明了DRM显示的过程，这里详细补充几点细节以及遇到的坑，具体可参考[Ref:DRM](https://blog.csdn.net/hexiaolong2009/article/details/83720940)
+
+为了避免撕裂，我一开始使用了双buf+flip的操作，写入数据后，调用filpEvent进行通知，等待Vblank时间间隙的到来然后刷新CTRC。同时该方法每次进入时都会`memset`显存地址内的数据`[mpp_decoder_discrete.cpp::write_data_to_buf:line264]`，但是实验结果显示会出现绿屏闪烁。逐帧查看是完全没问题(这里就排除了解码器的输出问题)。逐帧加快播放速度就会出现部分绿屏，整体感觉像是一部分数据没有来得及写入`buffer`。
+
+后来读到撕裂的具体原理是因为读写速度不一致导致。因为采用事件通知机制，必然是异步的。猜想是填入新帧时，我清空了数据，因此导致显示时后面数据被清空，因此在注释memset后该问题消失
+
+### 6.2 待续
