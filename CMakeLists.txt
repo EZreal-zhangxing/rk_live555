@@ -66,6 +66,12 @@ ${PROJECT_SOURCE_DIR}/src/rtsp_connect_discrete.cpp
 ${PROJECT_SOURCE_DIR}/src/mpp_decoder_discrete.cpp  
 ${PROJECT_SOURCE_DIR}/src/rtsp_client.cpp)
 
+# v4l2 读取测试
+add_executable(v4l2_read ${PROJECT_SOURCE_DIR}/src/v4l2_read.cpp)
+
+# live555 发送由mpp编码的rgb数据 数据来源v4l2
+add_executable(rtsp_send_v4l2_mpp_rgb_live555 ${PROJECT_SOURCE_DIR}/src/write_packet_to_fifo.cpp 
+    ${PROJECT_SOURCE_DIR}/src/rtsp_with_mpp_using_v4l2_live555_rgb.cpp)
 # fifo 读取测试
 # add_executable(fifo_test ${PROJECT_SOURCE_DIR}/src/write_packet_to_fifo.cpp ${PROJECT_SOURCE_DIR}/src/fifo_test.cpp)
 
@@ -116,3 +122,11 @@ target_link_libraries(rtsp_send_opencv_mpp_yuv_live555_server
 # -lavcodec
 # -lliveMedia -lBasicUsageEnvironment -lgroupsock -lUsageEnvironment 
 # -lssl -lcrypto)
+
+target_link_libraries(rtsp_send_opencv_mpp_yuv_live555_server 
+-lavformat -lavcodec -lavutil -lswscale -lavdevice 
+-lz -lpthread -lswresample -llzma -lm ${OpenCV_LIBS} -lrockchip_mpp
+-lliveMedia -lBasicUsageEnvironment -lgroupsock -lUsageEnvironment 
+-lssl -lcrypto)
+
+target_link_libraries(v4l2_read -lv4l2)
