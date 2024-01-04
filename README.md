@@ -601,27 +601,27 @@ v4l2与设备驱动进行交互的函数主要是：`ioctl`,通过发送指定�
 主要流程如下：
 
 1. `open`函数打开设备驱动获得文件句柄`fd`
-2. `VIDIOC_S_FMT`设置采集格式，输入是`v4l2_format`格式的数据，对于设备采集的数据类型可以通过:`v4l2-ctl -d /dev/video* -V -D `进行查询。主要分两种：`V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE`以及`V4L2_BUF_TYPE_VIDEO_CAPTURE`，这两种类别在后面分别对应不同的处理方法，但大致是相同的。下面以`multiplane`进行介绍
+2. `VIDIOC_S_FMT`设置采集格式，输入是`v4l2_format`格式的数据，对于设备采集的数据类型可以通过:`v4l2-ctl -d /dev/video* -V -D `进行查询驱动所支持的数据格式。对于可捕获的格式主要分两种：`V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE`以及`V4L2_BUF_TYPE_VIDEO_CAPTURE`，这两种类别在后面分别对应不同的处理方法，但大致是相同的。主要区别在于`multiplane`相比较与`CAPTURE`会返回多个`plane`，需要迭代去处理,而`CAPTURE`可以直接获取一帧图像。`RK3588`的`HDMI`输入只支持`multiplane`，因此下面以`multiplane`进行介绍
 3. 在第2步设置采集格式后，可以通过`VIDIOC_G_FMT`进行查询采集格式是否设置正确，该指令输入和输出均是`v4l2_format`。
 4. 申请缓冲队列，`VIDIOC_REQBUFS`通过该指令可以在内核开启对应个数的缓冲区，设备驱动会将数据写入该部分，利用程序对这块进行读写既可以获得视频数据。这里memory有多种方式，采用最多的是`V4L2_MEMORY_MMAP`内存映射方式，即将内核空间的区域映射到用户空间。同时还注意`V4L2_MEMORY_DMABUF`(有待补充)
-5. 申请缓存之后，同时要注意，我们的设备捕获的是`multiplane`的模式，一帧数据会返回多个`plane`(具体有多少个`plane`在第3步进行采集格式查询的时候会返回)，因此我们需要创建一块用户空间的内存区域，其中包含了和缓存队列元素个数一致的用户内存区域，用来对缓存队列进行内存映射。因为是`multiplane`模式，所以我们定义一个`v4l2_plane`的数组，同时也定义了一个和`v4l2_plane`一一对应的用户空间地址`mmpaddr`,见：`struct image_buffer_with_plane`，并将`plane`信息与`v4l2_buffer`进行绑定,然后使用`VIDIOC_QUERYBUF`查询缓存信息，然后使用`mmap`函数根据缓存查询出来的`plane`大小和偏移，**逐一映射到用户空间**
-6. 在第5步映射完毕后，需要将查询到的`plane`进行入队,`VIDIOC_QBUF`指令，这样驱动在获取到数据后，会将数据写入该队列，等待消费，在我们出队消费掉后进行压队。以达到循环使用的过程
+5. 申请缓存之后，同时要注意，我们的设备捕获的是`multiplane`的模式，一帧数据会返回多个`plane`(具体有多少个`plane`在第3步进行采集格式查询的时候会返回)，因此我们需要创建一块用户空间的内存区域，其中包含了和缓存队列元素个数一致的用户内存区域，用来对缓存队列进行内存映射。因为是`multiplane`模式，所以我们定义一个`v4l2_plane`的数组，同时也定义了一个和`v4l2_plane`一一对应的用户空间地址`mmpaddr`,见：`struct image_buffer_with_plane`，并将`plane`信息与`v4l2_buffer`进行绑定,然后使用`VIDIOC_QUERYBUF`查询缓存信息，然后使用`mmap`函数根据缓存查询出来的`plane`大小和偏移，**逐一映射到用户空间**。缓存队列的长度同时也决定了`struct image_buffer_with_plane`的数组长度。
+6. 在第5步映射完毕后，需要将查询到的`plane`进行入队,`VIDIOC_QBUF`指令，这样驱动在获取到数据后，会将数据写入该队列，等待消费，在我们将缓存出队消费掉后进行压队。以达到循环使用的过程
 
 ```
-                     data
-                      |
-   ---------------------------------------
-   |                                     |
-  pop                   push             |
-   ^                     |               |
-   |                     V               V
--------    -------    -------         -------
-| ele | -- | ele | -- | ... |         | ele |
--------    -------    -------         -------  
+				                     data
+				                      |
+				   ---------------------------------------
+				   |                                     |
+				  pop                                 	push
+				   ^                                     |
+				   |                                     V
+				-------    -------    -------         -------
+				| ele | -- | ele | -- | ... |         | ele |
+				-------    -------    -------         -------  
 
 ```
 7. `VIDIOC_STREAMON` 开始进行数据获取
-8. 使用`VIDIOC_DQBUF`指令进行出队操作，主要输入输出也是`v4l2_buffer`,出队后，更具`buffer`中的`index`确定是属于队列的第几个元素，与第5步中申请的`image_buffer_with_plane`索引一致。**遍历`plane`，逐个`plane`进行拷出**
+8. 使用`VIDIOC_DQBUF`指令进行出队操作，主要输入输出也是`v4l2_buffer`,出队后，根据`v4l2_buffer`中的`index`确定是属于队列的第几个元素，与第5步中申请的`image_buffer_with_plane`索引一致。**遍历`plane`，逐个`plane`进行拷出**
 9. 出队后的数据，再次放回队列`VIDIOC_QBUF`
 10. `VIDIOC_STREAMOFF`关闭数据获取
 11. 取消映射`munmap`
