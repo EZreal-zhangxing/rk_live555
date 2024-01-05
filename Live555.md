@@ -361,7 +361,7 @@ mpp_enc_cfg_set_s32(cfg, "h264:trans8x8", 1);						// 8x8变换使能标志位
 4. 然后将这块缓存绑定到`mppFrame`上
 5. 最后送入编码器进行编码，得到`mppPacket`
 
-*在进行编码时可以直接使用直接提交的方式，也可以使用外部缓存池的方式进行编码，但是对于解码而言，官方给出的三种内存交互场景是优先推荐使用缓存池的。*
+*在进行编码时可以直接使用直接提 交的方式，也可以使用外部缓存池的方式进行编码，但是对于解码而言，官方给出的三种内存交互场景是优先推荐使用缓存池的。*
 
 
 ##### 1.2.2.3 编码
@@ -372,9 +372,15 @@ mpp_enc_cfg_set_s32(cfg, "h264:trans8x8", 1);						// 8x8变换使能标志位
 
 前两种为简单款的编码流程，但是要注意的是`encode_*`函数是阻塞式函数，一定程度上会影响软硬件的整体并行效率
 
+使用`encode_*`函数主要流程如下：
+
+1. 调用`encode_put_frame`送入`mppFrame`
+2. 调用`encode_get_packet`获取`mppPacket`
+3. 判断`mppPacket`信息是否为空，不为空进入发送模块
+
 *拷贝与零拷贝输入
-编码器的输入不支持 CPU 分配的空间，如果需要支持编码 CPU 分配的地址，需要分配 MppBuffer
-并把数据拷贝进去，这样做会很大程度影响效率。编码器更喜欢 dmabuf/ion/drm 内存形式的输入，
+编码器的输入不支持 CPU 分配的空间，如果需要支持编码 CPU 分配的地址，需要分配 `MppBuffer`
+并把数据拷贝进去，这样做会很大程度影响效率。编码器更喜欢 `dmabuf/ion/drm` 内存形式的输入，
 这样可以实现零拷贝的编码，额外的系统开销最小。*
 
 使用`poll/dequeue/enqueue`可以指定使用阻塞模式或者非阻塞模式。
@@ -382,23 +388,99 @@ mpp_enc_cfg_set_s32(cfg, "h264:trans8x8", 1);						// 8x8变换使能标志位
 同时也可以在初始化上下文`(mppCtx)`的时候可以指定任务是同步模式还是异步模式，异步模式会直接返回控制权，但并不能确保在执行任务的时候任务是否已经完成。见[`mpp_task.h`](https://github.com/rockchip-linux/mpp/blob/ed377c99a733e2cdbcc457a6aa3f0fcd438a9dff/inc/mpp_task.h)
 
 ```c++
-// set frame
+//1. set frame
 res = mppApi->poll(mppCtx, MPP_PORT_INPUT, MPP_POLL_BLOCK); 		// 提交一个阻塞的输入任务
 res = mppApi->dequeue(mppCtx, MPP_PORT_INPUT, &task);				// 出队一个任务
 res = mpp_task_meta_set_packet(task,KEY_OUTPUT_PACKET,mppPacket);	// 设置输出packet
 res = mpp_task_meta_set_frame(task, KEY_INPUT_FRAME, mppframe);		// 设置输入frame
 res = mppApi->enqueue(mppCtx, MPP_PORT_INPUT, task);				// 任务压入队列
 
-// get packet
+//2. get packet
 res = mppApi->poll(mppCtx, MPP_PORT_OUTPUT, MPP_POLL_BLOCK);		// 提交一个阻塞的输出任务
 res = mppApi->dequeue(mppCtx, MPP_PORT_OUTPUT, &task);				// 出队一个任务
 res = mpp_task_meta_get_packet(task, KEY_OUTPUT_PACKET, &mppPacket);// 获取输出packet
 res = mppApi->enqueue(mppCtx, MPP_PORT_OUTPUT, task);				// 任务压入队列
+
+/*3. 判断 mppPacket 是否为空，不为空进行发送模块*/
+```
+
+#### 1.2.3  图片拷贝
+
+`RockChip`支持两种图片格式的编码：`YUV/BGR`，因此在我们将图片数据采用内存拷贝的方式提交给硬件的时候`(mppFrame)`，分别对应了不同的方式。主要要注意的点就是`mpp`硬件编码时是对16位对齐。也就是每次读取16位的数据到硬件中。所以我们的图片长宽都需要关于16位对齐。
+
+##### 1.2.3.1 `YUV`图像拷贝
+
+`YUV`数据格式分为三部分：分别是亮度`Y`和色度`UV`。`YUV`相对于传统`RGB`能压缩一半的存储大小。
+
+以 $1920 \times 1080 \times 3$的`BGR`图像为例，将其转换成`YUV`图像后，图像大小将变为$ 1920 \times 1080 $的`Y`分量，$ {1920 \over 2} \times {1080 \over 2}$ 的`U`分量以及$ {1920 \over 2} \times {1080 \over 2}$ 的`V`分量。
+
+总共是$ 1920 \times {1080 \times 3 \over 2} \times 1$ 的图像
+
+**注：其中`UV`的交叉存储和分别存储对应了`YUV420SP`以及`YUV420P`这两种格式。这两种不同的格式对应的拷贝方式也不一样**
+
+`NV12/NV21`属于`YUV420SP`，`NV12`是`UV`交叉，而`NV21`是`VU`交叉
+
+`YU12/YV12` 属于`YUV420P`，`YU12`是`YUV`顺序存储，而`YV12`是`YVU`顺序
+
+这两种图像排列方式如下图所示：
+
+```
+-------------------------------------           -------------------------------------  
+|                                   |           |                                   |
+|                                   |           |                                   |
+|                 Y                 |           |                 Y                 |
+|              (YUV420P)            |           |             (YUV420SP)            |
+|                                   |           |                                   |
+|                                   |           |                                   |
+-------------------------------------           -------------------------------------
+|                 U                 |           |U|V|U|V|U|V|U|V|...				|
+|-----------------------------------|           |              ...                  |
+|                 V                 |           |                                   |
+-------------------------------------           -------------------------------------
+```
+
+在`Mpp`编码中因为要关于16字节对齐：
+
+```c++
+#define MPP_ALIGN(x, a)         (((x)+(a)-1)&~((a)-1)) 			/*关于16对齐的宏函数*/
+```
+
+所以在例子$ 1920 \times 1080 $ 的图像中，图像宽度不变，同时高度关于16字节对齐成$1088$，因此整体`YUV420P`图像格式的布局如下：
+
+```
+YUV图像分量的分布为：wxh的亮度Y，w/2 x h/2的U，w/2 x h/2的V
+---------------------w(1920)--------------------------- 
+|                            						  |
+|                            						  |
+|                            						  |
+|             			Y              				h(1080)
+|                            						  |
+|                            						  |
+|                            						  |
+------------------------------------------------------- 
+|                            						  |
+|             			gap    						  | 8
+------------------------------ ------------------------- 
+|                            						  |
+|              			 U             			   h/4(270)
+|                            						  |
+------------------------------------------------------- 
+|             			gap            				  | 2
+------------------------------ ------------------------- 
+|                            						  |
+|              			 V             				h/4(270)
+|                            						  |
+------------------------------------------------------- 
+|             			gap            				  | 2
+------------------------------------------------------- 
+
 ```
 
 
 
-#### 1.2.3  码流封装
+#### 1.2.4  码流封装
+
+
 
 
 
@@ -415,4 +497,7 @@ res = mppApi->enqueue(mppCtx, MPP_PORT_OUTPUT, task);				// 任务压入队列
 2. [一文分析Linux v4l2框架](https://zhuanlan.zhihu.com/p/613018868)
 3. [视频编码码率控制：CBR、VBR和ABR](https://zhuanlan.zhihu.com/p/189497566)
 4. [H264码流中SPS PPS详解](https://zhuanlan.zhihu.com/p/27896239)
+5. [如何理解 YUV ？](https://zhuanlan.zhihu.com/p/85620611)
+6. [YUV图解 （YUV444, YUV422, YUV420, YV12, NV12, NV21）](https://zhuanlan.zhihu.com/p/248116694)
+7. 
 
