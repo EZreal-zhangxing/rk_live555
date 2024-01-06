@@ -328,12 +328,12 @@ MPP_RET read_frame(cv::Mat & cvframe,void * ptr){
         memcpy(buf_y + row * hor_stride,cvframe.datastart + read_size,width);
         read_size += width;
     }
-
+    /*可优化成height/4*/
     for (row = 0; row < height / 2; row++) {
         memcpy(buf_u + row * hor_stride/2,cvframe.datastart + read_size ,width/2);
         read_size += width/2;
     }
-
+    /*可优化成height/4*/
     for (row = 0; row < height / 2; row++) {
         memcpy(buf_v + row * hor_stride/2,cvframe.datastart + read_size ,width/2);
         read_size += width/2;

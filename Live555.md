@@ -256,7 +256,7 @@ mpp_enc_cfg_set_s32(cfg, "h264:cabac_idc", 0);						// cabac_init_idc参数
 mpp_enc_cfg_set_s32(cfg, "h264:trans8x8", 1);						// 8x8变换使能标志位
 ```
 
-##### 1.2.1.3 头信息获取
+##### <a id="getHead">1.2.1.3 头信息获取</a>
 
 在配置参数到`mppCfg`对象之后，通过`MPP_ENC_SET_CFG`设置给`mppCtx`上下文。在设置成功后可以通过`MPP_ENC_GET_HDR_SYNC`来获取编码器的`PPS,SPS`信息，
 
@@ -442,13 +442,13 @@ res = mppApi->enqueue(mppCtx, MPP_PORT_OUTPUT, task);				// 任务压入队列
 在`Mpp`编码中因为要关于16字节对齐：
 
 ```c++
-#define MPP_ALIGN(x, a)         (((x)+(a)-1)&~((a)-1)) 			/*关于16对齐的宏函数*/
+#define MPP_ALIGN(x, a)         (((x)+(a)-1)&~((a)-1)) 			/*关于参数a对齐的宏函数*/
 ```
 
 所以在例子$ 1920 \times 1080 $ 的图像中，图像宽度不变，同时高度关于16字节对齐成$1088$，因此整体`YUV420P`图像格式的布局如下：
 
 ```
-YUV图像分量的分布为：wxh的亮度Y，w/2 x h/2的U，w/2 x h/2的V
+YUV图像分量的分布为：wxh的亮度Y，w/2 x h/2的U，w/2 x h/2的V，因为YUV420SP中UV是分开存储，所以UV各占wxh/4
 ---------------------w(1920)--------------------------- 
 |                            						  |
 |                            						  |
@@ -476,17 +476,122 @@ YUV图像分量的分布为：wxh的亮度Y，w/2 x h/2的U，w/2 x h/2的V
 
 ```
 
+`YUV`图像数据拷贝函数如下：
 
+```c++
+MPP_RET read_frame(cv::Mat & cvframe,void * ptr){
+    RK_U32 row = 0;
+    RK_U32 read_size = 0;
+    RK_U8 *buf_y = (RK_U8 *)ptr;
+    RK_U8 *buf_u = buf_y + hor_stride * ver_stride; // NOTE: u分量起始指针
+    RK_U8 *buf_v = buf_u + hor_stride * ver_stride / 4; // NOTE: v分量起始指针
+    // buf_y = cvframe.data;
+    // copy Y
+    for (row = 0; row < height; row++) {
+        memcpy(buf_y + row * hor_stride,cvframe.datastart + read_size,width);
+        read_size += width;
+    }
+	// copy U
+    for (row = 0; row < height / 2; row++) {
+        memcpy(buf_u + row * hor_stride/2,cvframe.datastart + read_size ,width/2);
+        read_size += width/2;
+    }
+	// copy V
+    for (row = 0; row < height / 2; row++) {
+        memcpy(buf_v + row * hor_stride/2,cvframe.datastart + read_size ,width/2);
+        read_size += width/2;
+    }
+    return MPP_OK;
+}
+```
+
+
+
+##### 1.2.3.2 `BGR`图像拷贝
+
+对于`BGR`图像，`mpp`的处理方式更加直接，不需要做通道分离，只需要按行拷入即可，同样需要注意考入的时候款和高需要关于16字节对齐。
+
+因为`BGR`是三通道数据，因此需要注意的是拷贝的时候实际水平步长应该是宽的3倍并关于16位对齐。也就是$ \lceil 1920 \times 3 \rceil$
+
+```
+-------------w(1920)-----------------------w(1920)-----------------------w(1920)----------
+|r|g|b|r|g|b|                |                              |                            |
+|                            |                              |                            |
+|                            |                              |                            |
+|             Y              h(1080)                        |                            |
+|                            |                              |                            |
+|                            |                              |                            |
+|                            |                              |                            |
+-------------------------------------------w(1920)-----------------------w(1920)----------
+|                            |                              |                            |
+|             gap            | 8                            |                            |
+-------------------------------------------w(1920)-----------------------w(1920)----------
+
+
+```
 
 #### 1.2.4  码流封装
 
+在本项目中，发送模块分了两种方式，分别是`FFMPEG，LIVE555`格式，使用`FFMPEG`格式需要将数据封装成它需要的`AvPacket`。而使用`live555`则不需要，可以直接送入发送队列。
 
+##### 1.2.4.1 FFMPEG码流封装
 
+这里创建一个`AvPacket`，这里有五个参数需要设置:`[data,size,buf,pts,dts]`
 
+将`mppPacket`的`data`部分赋值给`AvPacket.data`，同时设置这块数据包的大小，
+
+然后创建一块关联`mppPacket`的`avBuffer`，并赋值给`AvPacket`
+
+最后设置编码时戳。这块代码参考了魔改版本的[`FFMPEG`](https://github.com/jjm2473/ffmpeg-rk/tree/enc)
+
+该版本中实现了一个`rkmpp`版本的编解码器[`rkmppenc`](https://github.com/jjm2473/ffmpeg-rk/blob/enc/libavcodec/rkmppenc.c),[`rkmppdec.c`](https://github.com/jjm2473/ffmpeg-rk/blob/enc/libavcodec/rkmppdec.c)
+
+```c++
+typedef struct {
+    MppPacket packet;
+    AVBufferRef *encoder_ref;
+} RKMPPPacketContext;
+
+RKMPPPacketContext *pkt_ctx = (RKMPPPacketContext *)av_mallocz(sizeof(*pkt_ctx));
+pkt_ctx->packet = mppPacket;
+int keyframe = 0;
+// TODO: outside need fd from mppbuffer?
+packet->data = (uint8_t *)mpp_packet_get_data(mppPacket);
+packet->size = mpp_packet_get_length(mppPacket);
+packet->buf = av_buffer_create((uint8_t*)packet->data, packet->size,
+    rkmpp_release_packet, pkt_ctx, AV_BUFFER_FLAG_READONLY);
+packet->pts = mpp_packet_get_pts(mppPacket);
+packet->dts = mpp_packet_get_dts(mppPacket);
+
+if (packet->pts <= 0)
+    packet->pts = packet->dts;
+if (packet->dts <= 0)
+    packet->dts = packet->pts;
+meta = mpp_packet_get_meta(mppPacket);
+if (meta)
+    mpp_meta_get_s32(meta, KEY_OUTPUT_INTRA, &keyframe);
+if (keyframe){
+    packet->flags |= AV_PKT_FLAG_KEY;
+}
+```
+
+##### 1.2.4.2 `LIVE555`码流封装
+
+对于`LIVE555`而言，不需要进行封装可以直接进行发送。
 
 ## 1.3 码流发送模块
 
+码流发送模块同样分为两种方式：`FFMPEG`模式发送以及`LIVE555`进行发送
 
+在码流发送前，我们需要注意到，在章节[1.2.1.3 头信息获取](#getHead)中我们介绍了一些关于`SPS，PPS`信息的特性。
+
+解码器在获取这两个信息后才能正确初始化进行解码，因此我们
+
+
+
+### 1.3.1 `FFMPEG`发送模式
+
+对于封装好的AvPacket可以直接调用`av_interleaved_write_frame`函数进行发送，
 
 
 
@@ -499,5 +604,5 @@ YUV图像分量的分布为：wxh的亮度Y，w/2 x h/2的U，w/2 x h/2的V
 4. [H264码流中SPS PPS详解](https://zhuanlan.zhihu.com/p/27896239)
 5. [如何理解 YUV ？](https://zhuanlan.zhihu.com/p/85620611)
 6. [YUV图解 （YUV444, YUV422, YUV420, YV12, NV12, NV21）](https://zhuanlan.zhihu.com/p/248116694)
-7. 
+7. [深入理解pts，dts，time_base](https://zhuanlan.zhihu.com/p/101480401)
 
