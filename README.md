@@ -32,6 +32,7 @@
 
 从[Live555](http://live555.com/mediaServer/#downloading)下载最新版本的源码，然后进入主目录，添加config.rk3588,该文件主要申明编译架构以及编译参数。文件内容如下：
 
+
 ```
 CROSS_COMPILE?=         aarch64-linux-gnu-
 COMPILE_OPTS =          $(INCLUDES) -I. -O2 -DSOCKLEN_T=socklen_t -DNO_SSTREAM=1 -D_LARGEFILE_SOURCE=1 -D_FILE_OFFSET_BITS=64 -std=c++2a -DNO_STD_LIB -I/usr/include/openssl
@@ -59,6 +60,11 @@ PREFIX = /usr/local/live555
 其中需要两个依赖包：
 - [x] openssl
 - [x] libcrypto
+
+注意如果不是`Rk3588`，是其他环境，请选择其他对应的配置文件。其他配置文件有可能需要手动指定C++版本和openssl头文件所在目录
+```
+-std=c++2a -DNO_STD_LIB -I/usr/include/openssl
+```
 
 然后执行编译安装即可
 ```
