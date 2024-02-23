@@ -81,7 +81,7 @@
 12. `close`设备句柄
 
 
-```   
+```   html
                                                                                 
                       ---------------------                                     
                       |    v4l2_format    |                                     
@@ -617,7 +617,7 @@ if (keyframe){
 ├── groupsock					// 网络通讯相关，包含了组播定义，以及网络流的发送喜爱嗯官
 │   └── include
 ├── hlsProxy					// hls相关
-├── liveMedia					// 媒体类相关，定义了用来处理各种类型数据源以及发送数据元相关的媒体类文									件，例如文件，H265,H264,H261,H263,AC3等音频格式
+├── liveMedia					// 媒体类相关，定义了用来处理各种类型数据源以及发送数据元相关的媒体类文件，例如文件,H265,H264,H261,H263,AC3等音频格式
 │   └── include
 ├── mediaServer					// 媒体服务器类
 ├── proxyServer					// 代理服务器样例
@@ -628,8 +628,103 @@ if (keyframe){
 
 ```
 
+`Live555`的发送主要采用文件发送的形式，将音视频切片文件（例如，`mp4,avi,ts,flv`）通过自定义的各种数据源(`*Source`)进行读取后，通过`*Sink`进行数据处理，然后交由底层的`Socket`转发出去（`test*VideoStreamer`）或者转换成对应的文件（`test*ToTransportStream`）。
+
+在`liveMedia`文件夹中包含了各种数据类型的处理函数，例如：
+
+1. `ByteStreamFileSource.hh` ，字节文件流数据源
+2.  `MP3FileSource.hh`，MP3文件数据源
+3. `ADTSAudioFileSource.hh` ADTS音频文件数据源
+
+在`testProgs`文件夹中给出了码流接受和发送的相关测试代码。这里主要从单播，组播方面进行代码分析。用来讲解`Live555`的发送原理
+
+#### 1.3.2.1 `Live555`单播
+
+主要参见`testProgs/testOnDemandRTSPServer.cpp,testProgs/testH264VideoToTransportStream.cpp`文件。
+
+`testProgs/testH264VideoToTransportStream.cpp`主要功能是将`h264`文件读取后转换成`ts`文件。该流程和整个码流的发送，在文件读取创建数据源方面是类似的。
+
+`testProgs/testOnDemandRTSPServer.cpp`则包含了常见的各种文件的单播过程。该文件的`main`函数主要功能如下：
+
+##### 1. `TaskScheduler，UsageEnvironment` 对象创建
+
+```c++
+  TaskScheduler* scheduler = BasicTaskScheduler::createNew();
+  env = BasicUsageEnvironment::createNew(*scheduler);
+```
+
+创建任务调度以及基础环境对象。`Live555`是通过事件驱动的方式运行，能很好的节省设备资源。在`TaskScheduler`中我们要注意的函数是`doEventLoop()`该函数是整个事件监听的入口。在`BasicUsageEnvironment/BasicTaskScheduler0.cpp:83` 里面对该函数进行了实现，可以看到主要使用一个死循环调用`SingleStep`，该函数里面主体是`Socket`事件的监听，以及处理
+
+##### 2. 连接授权
+
+```c++
+UserAuthenticationDatabase* authDB = NULL;
+#ifdef ACCESS_CONTROL
+  // To implement client access control to the RTSP server, do the following:
+  authDB = new UserAuthenticationDatabase;
+  authDB->addUserRecord("username1", "password1"); // replace these with real strings
+  // Repeat the above with each <username>, <password> that you wish to allow
+  // access to the server.
+#endif
+
+  // Create the RTSP server:
+#ifdef SERVER_USE_TLS
+  // Serve RTSPS: RTSP over a TLS connection:
+  RTSPServer* rtspServer = RTSPServer::createNew(*env, 322, authDB); // 使用加密的RTSP服务
+#else
+  // Serve regular RTSP (over a TCP connection):
+  RTSPServer* rtspServer = RTSPServer::createNew(*env, 8554, authDB); // 不使用加密的RTSP服务
+#endif
+  if (rtspServer == NULL) {
+    *env << "Failed to create RTSP server: " << env->getResultMsg() << "\n";
+    exit(1);
+  }
+#ifdef SERVER_USE_TLS
+#ifndef STREAM_USING_SRTP
+#define STREAM_USING_SRTP True
+#endif
+  rtspServer->setTLSState(PATHNAME_TO_CERTIFICATE_FILE, PATHNAME_TO_PRIVATE_KEY_FILE,
+			  STREAM_USING_SRTP);
+#endif
+
+```
+
+对于需要鉴权的连接，这里配置连接用户名以及密码。同时创建了一个`RTSP`服务
+
+##### 3. 数据处理
+
+由于`Live555`主要通过音视频文件进行推流，这里以`H264`文件为例
+
+```c++
+{
+    char const* streamName = "h264ESVideoTest";
+    char const* inputFileName = "test.264";
+    // 创建一个媒体服务会话对象
+    ServerMediaSession* sms = ServerMediaSession::createNew(*env, streamName, streamName,descriptionString);
+    // 并绑定一个H264视频文件服务子会话
+    sms->addSubsession(H264VideoFileServerMediaSubsession::createNew(*env, inputFileName, reuseFirstSource));
+    // 将该服务媒体会话对象绑定到RTSP服务上
+    rtspServer->addServerMediaSession(sms);
+	// 打印连接信息
+    announceStream(rtspServer, sms, streamName, inputFileName);
+}
+```
 
 
+
+
+
+#### 1.3.2.2 `Live555` 组播
+
+主要参考代码`testProgs/testH264VideoStreamer.cpp`
+
+运行后，通过`ffplay`使用如下命令即可播放。就能播放`test.h264`文件
+
+```shell
+ffplay -i rtsp://192.168.1.222:8554/testStream  -rtsp_transport udp_multicast
+```
+
+#### 1.3.2.3  `Live555`自定义数据源，从内存中直接读取
 
 
 
