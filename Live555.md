@@ -642,7 +642,7 @@ if (keyframe){
 
 主要参见`testProgs/testOnDemandRTSPServer.cpp,testProgs/testH264VideoToTransportStream.cpp`文件。
 
-`testProgs/testH264VideoToTransportStream.cpp`主要功能是将`h264`文件读取后转换成`ts`文件。该流程和整个码流的发送，在文件读取创建数据源方面是类似的。
+`testProgs/testH264VideoToTransportStream.cpp`主要功能是将`h264`文件读取后转换成`ts`文件。该文件格式转换流程和码流的发送是有一定的相似之处，其中在文件读取创建数据源方面是类似的。
 
 `testProgs/testOnDemandRTSPServer.cpp`则包含了常见的各种文件的单播过程。该文件的`main`函数主要功能如下：
 
@@ -691,6 +691,16 @@ UserAuthenticationDatabase* authDB = NULL;
 
 对于需要鉴权的连接，这里配置连接用户名以及密码。同时创建了一个`RTSP`服务
 
+创建`RTSP`服务主要是有如下操作：
+
+```
+--------------------	 ----------------------		----------
+|  RTSPServer::New | --> | GenericMediaServer | --> | Medium |
+--------------------	 ----------------------		----------
+```
+
+创建`Medium`对象后，将该对象加入当前环境对象的媒体表中`MediaLookupTable::HashTable`
+
 ##### 3. 数据处理
 
 由于`Live555`主要通过音视频文件进行推流，这里以`H264`文件为例
@@ -710,7 +720,45 @@ UserAuthenticationDatabase* authDB = NULL;
 }
 ```
 
+创建`ServerMediaSession`的时候主要包含如下几步：
 
+1. 调用`createNew`方法返回一个`ServerMediaSession`对象，该对象包含了流的名字，信息，描述信息，`SSM`和`SDP`信息。后面这两者默认是`False`和`Null`
+2. `ServerMediaSession`对象初始化一个`Medium`对象，并同时初始化`SDP`描述信息
+
+其中`ServerMediaSession`是一个单链表
+
+创建`H264VideoFileServerMediaSubsession`对象的时候则是：
+
+1. 初始化父类`FileServerMediaSubsession`对象，由`FileServerMediaSubsession`初始化`OnDemandServerMediaSubsession`父类对象。
+2. 初始化`ServerMediaSubsession`父类对象，并在`OnDemandServerMediaSubsession`写入流的元信息
+3. 最后在`ServerMediaSubsession`里初始化一个`Medium`
+
+其中在调用`addSubsession`后，将本对象加入`ServerMediaSession`的单向链表里
+
+在`rtspServer->addServerMediaSession`执行时，会将`<streamName,ServerMediaSession>`键值对保存在`GenericMediaServer`中的`HashTable fServerMediaSessions`中
+
+最后进入代码：
+
+```c++
+#ifdef SERVER_USE_TLS
+  // (Attempt to) use the default HTTPS port (443) instead:
+  char const* httpProtocolStr = "HTTPS";
+  if (rtspServer->setUpTunnelingOverHTTP(443)) {
+#else
+  char const* httpProtocolStr = "HTTP";
+  if (rtspServer->setUpTunnelingOverHTTP(80) || rtspServer->setUpTunnelingOverHTTP(8000) || rtspServer->setUpTunnelingOverHTTP(8080)) {
+#endif
+    *env << "\n(We use port " << rtspServer->httpServerPortNum() << " for optional RTSP-over-" << httpProtocolStr << " tunneling.)\n";
+  } else {
+    *env << "\n(RTSP-over-" << httpProtocolStr << " tunneling is not available.)\n";
+  }
+
+  env->taskScheduler().doEventLoop(); // does not return
+
+  return 0; // only to prevent compiler warning
+```
+
+让环境开始进入事件循环。
 
 
 
