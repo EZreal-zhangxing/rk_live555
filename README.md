@@ -160,14 +160,15 @@ live555的服务端
 
 在`rtsp_service.cpp` 代码中主要有两个方法`create_live555_multicast`，`create_live555`,分别对应组播服务和单播服务。可以修改`main`方法开启对应的服务
 
-create_live555 `[Ref:live555/testProgs/testH264VideoToTransportStream.cpp]`
+单播：create_live555 `[Ref:live555/testProgs/testH264VideoToTransportStream.cpp]`
 
-create_live555_multicast `[Ref:live555/testProgs/testH264VideoStreamer.cpp]`
+组播：create_live555_multicast `[Ref:live555/testProgs/testH264VideoStreamer.cpp]`
 
 运行脚本：
 ```
 ./rtsp_service
 ```
+
 
 ## 3.4 rtsp_send_opencv_mpp_yuv_live555
 live555的发送端
@@ -336,6 +337,7 @@ AUD是帧分割符
 -------------------------------------------                             ----------------------------------
 
 ```
+
 
 注意到：**组播需要一个广播地址,这里我固定成了232.242.152.41**, 可以自行修改广播地址 `write_packet_to_fifo.cpp:line:241`
 
@@ -527,7 +529,11 @@ P帧和I帧的三个部分会分成三个独立的包在网络中发送，但是
 
 ### 3.7.3 H264VideoStreamDiscreteFramer 系列
 
-这套是当服务器端调用H264VideoStreamFramer进行发送时，对应客户端代码文件是：`rtsp_connect_discrete.cpp,mpp_decoder_discrete.cpp`
+这套是当服务器端调用H264VideoStreamDiscreteFramer进行发送时，对应客户端代码文件是：`rtsp_connect_discrete.cpp,mpp_decoder_discrete.cpp`
+
+服务器端见
+1. `rtsp_service.cpp::create_live555_multicast`方法中的`play`函数，该函数从指定的FIFO队列中读取数据帧发送
+2. `write_packet_to_fifo.cpp::create_multicast_live555`中的`play`函数，该函数通过自定义的数据源`RedefineByteStreamMemoryBufferSource`来进行发送
 
 使用这套发送，网络传递(局域网)+解码+显示大概在`10ms`左右
 
@@ -540,7 +546,7 @@ ${PROJECT_SOURCE_DIR}/src/mpp_decoder_discrete.cpp
 ${PROJECT_SOURCE_DIR}/src/rtsp_client.cpp)
 ```
 
-服务端H264VideoStreamFramer这个对象对码流是不会进行过滤提取，会直接转发。对于我们每次写入的都是一帧完整数据直接转发会减少很多处理时间。
+服务端H264VideoStreamDiscreteFramer这个对象对码流是不会进行过滤提取，会直接转发。对于我们每次写入的都是一帧完整数据直接转发会减少很多处理时间。
 
 同时这个流对象不会去掉起始码，所以接收到的数据就是你发送的数据。同时我们也要注意到，当一个数据包过大的时候发送依然会分包发送，所以同样需要做拼接操作，
 但这个时候就需要根据协议的开头码来判断帧的结束，所以当`第五个字节`的值是`0x06`或者`0x67`时，说明上一个帧的包数据发送结束。然后将累计收到的数据送入队列进行后续的解码和显示操作。
@@ -683,5 +689,4 @@ v4l2与设备驱动进行交互的函数主要是：`ioctl`,通过发送指定�
 
 
 ### 6.3 待续
-
 
