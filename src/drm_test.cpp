@@ -121,7 +121,14 @@ int flip(int argc, char **argv)
 	conn_id = resources->connectors[0];		//获取connector id
  
 	connector = drmModeGetConnector(fd, conn_id);	//根据connector_id获取connector资源
-	
+
+	/**
+	 * connector 中modes是一个列表 分别对应不同的分辨率。因此要注意在此处选取第0个模式后
+	 * 后面 drmModeSetCrtc 设置modes的模式要和这里一样否则会报-28 (分配空间不足)错误
+	 * 该列表可以使用modetest -c 查看
+	 * 见https://doc.embedfire.com/linux/rk356x/driver/zh/latest/linux_driver/framework_drm.html#id4
+  	 * 在使用mpp解码后输出的时候，请确保解码的图像大小和此处显示的大小是一致的！
+	 */ 
 	create_fb(fd,connector->modes[0].hdisplay,connector->modes[0].vdisplay, 0xCDB38B, &buf[0]);	//创建显存和上色
 	create_fb(fd,connector->modes[0].hdisplay,connector->modes[0].vdisplay, 0xBBFFFF, &buf[1]);	
  
