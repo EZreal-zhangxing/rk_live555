@@ -62,6 +62,7 @@ PREFIX = /usr/local/live555
 - [x] libcrypto
 
 注意如果不是`Rk3588`，是其他环境，请选择其他对应的配置文件。其他配置文件有可能需要手动指定C++版本和openssl头文件所在目录
+
 [Update] 2025/1/13 鸣谢[@qizai](https://github.com/qizai29) 指出在LIBRARY_LINK中配置`ar cr `后面要添加一个空格，否则在makefile中无法和文件名有效隔开，会导致错误。 
 ```
 -std=c++2a -DNO_STD_LIB -I/usr/include/openssl
