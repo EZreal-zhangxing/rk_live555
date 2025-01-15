@@ -105,9 +105,9 @@ void DummySink::afterGettingFrame(void* clientData, unsigned frameSize, unsigned
     DummySink* sink = (DummySink*)clientData;
     // sink->get_recive_buffer(sink->fReceiveBuffer);
     // sink->smart_concat_and_send(clientData,frameSize,presentationTime);
-    // sink->concat_buffer_and_send(clientData,frameSize,presentationTime);
+    // sink->concat_buffer_and_send(clientData,frameSize,presentationTime); // 单播流拼接方法
    
-    sink->sendBufferdata(clientData,frameSize,presentationTime);
+    sink->sendBufferdata(clientData,frameSize,presentationTime); // 组播流拼接方法
     // sink->receive_test(clientData,frameSize,presentationTime);
     // sink->afterGettingFrame(frameSize, numTruncatedBytes, presentationTime, durationInMicroseconds);
     
