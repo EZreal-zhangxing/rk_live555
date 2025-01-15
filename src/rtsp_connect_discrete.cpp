@@ -601,8 +601,8 @@ void setupNextSubsession(RTSPClient* rtspClient) {
             }
             env << ")\n";
             // Continue setting up this subsession, by sending a RTSP "SETUP" command:
-            // rtspClient->sendSetupCommand(*scs.subsession, continueAfterSETUP, False, REQUEST_STREAMING_OVER_TCP);
-            rtspClient->sendSetupCommand(*scs.subsession, continueAfterSETUP, False, REQUEST_STREAMING_OVER_TCP,True);
+            // rtspClient->sendSetupCommand(*scs.subsession, continueAfterSETUP, False, REQUEST_STREAMING_OVER_TCP); // 不使用组播协议
+            rtspClient->sendSetupCommand(*scs.subsession, continueAfterSETUP, False, REQUEST_STREAMING_OVER_TCP,True); // 使用组播协议
             // struct sockaddr_storage * addr;
             // scs.subsession->getConnectionEndpointAddress(*addr);
             // scs.subsession->setDestinations(*addr);
