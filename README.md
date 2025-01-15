@@ -1,5 +1,19 @@
 # rk_live555
 
+# Update[2025/1/15]
+本代码支持组播和单播协议的推拉流，但需要修改部分源码。
+单播配置：
+1. 启用`rtsp_service.cpp:main:create_live555()`
+2. 设置单播协议 `rtsp_connect.h:REQUEST_STREAMING_OVER_TCP` True 为TCP,False 为UDP
+3. 启用`rtsp_connect_discrete.cpp:DummySink::afterGettingFrame:concat_buffer_and_send`  单播流拼接方法
+4. 启用`rtsp_connect_discrete.cpp:setupNextSubsession:sendSetupCommand:604`  单播协议
+
+组播配置：
+1. 启用`rtsp_service.cpp:main:create_live555_multicast()`
+2.  `rtsp_connect.h:REQUEST_STREAMING_OVER_TCP False` 组播下只能使用UDP
+3. 启用`rtsp_connect_discrete.cpp:DummySink::afterGettingFrame:sendBufferdata`  组播流拼接方法
+4.  启用`rtsp_connect_discrete.cpp:setupNextSubsession:sendSetupCommand:605`  组播协议
+
 # Abstract
 
 由于之前[rk_ffmpeg](https://github.com/EZreal-zhangxing/rk_ffmpeg)在推拉流上延迟依然有300ms+
